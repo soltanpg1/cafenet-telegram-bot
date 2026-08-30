@@ -1,4 +1,8 @@
 import logging
+import os
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
 import database as db
 import keyboards as kb
 from config import BOT_TOKEN, ADMIN_IDS, CARD_NUMBER, SUPPORT_INFO
@@ -11,6 +15,39 @@ from telegram.ext import (
 logging.basicConfig(level=logging.INFO)
 db.init_db()
 
+
+# =========================================================
+# Render Health Check
+# این بخش فقط برای باز نگه داشتن پورت در Render است.
+# منطق ربات تلگرام را تغییر نمی‌دهد.
+# =========================================================
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"Bot is running")
+
+    def log_message(self, format, *args):
+        pass
+
+
+def start_health_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    logging.info(f"Health server running on port {port}")
+    server.serve_forever()
+
+
+# اجرای سرور Render در یک Thread جدا
+health_thread = threading.Thread(
+    target=start_health_server,
+    daemon=True
+)
+health_thread.start()
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db.save_user(update.effective_user)
     context.user_data.clear()
@@ -19,6 +56,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "لطفاً گزینه موردنظر را انتخاب کنید:",
         reply_markup=kb.main_menu()
     )
+
 
 async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -74,6 +112,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=kb.back()
             )
             return
+
         rows = [
             [__import__("telegram").InlineKeyboardButton(
                 f"📦 {o['code']} — {o['service_name']}",
@@ -81,11 +120,13 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )]
             for o in orders[:20]
         ]
+
         rows.append([
             __import__("telegram").InlineKeyboardButton(
                 "🔙 بازگشت", callback_data="main"
             )
         ])
+
         await query.edit_message_text(
             "📋 سفارش‌های من",
             reply_markup=__import__("telegram").InlineKeyboardMarkup(rows)
@@ -94,12 +135,20 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("detail:"):
         order = db.get_order(data.split(":")[1], query.from_user.id)
+
         if not order:
             await query.edit_message_text(
-                "❌ سفارش پیدا نشد.", reply_markup=kb.back("myorders")
+                "❌ سفارش پیدا نشد.",
+                reply_markup=kb.back("myorders")
             )
             return
-        amount = f"{order['amount']:,} تومان" if order["amount"] else "پس از بررسی"
+
+        amount = (
+            f"{order['amount']:,} تومان"
+            if order["amount"]
+            else "پس از بررسی"
+        )
+
         await query.edit_message_text(
             f"📦 سفارش #{order['code']}\n\n"
             f"خدمت: {order['service_name']}\n"
@@ -135,19 +184,24 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+
 async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     stage = context.user_data.get("stage")
 
     if stage == "name":
         context.user_data["full_name"] = update.message.text
         context.user_data["stage"] = "phone"
-        await update.message.reply_text("📱 شماره موبایل خود را ارسال کنید.")
+        await update.message.reply_text(
+            "📱 شماره موبایل خود را ارسال کنید."
+        )
         return
 
     if stage == "phone":
         context.user_data["phone"] = update.message.text
         context.user_data["stage"] = "description"
-        await update.message.reply_text("📝 توضیحات سفارش را ارسال کنید.")
+        await update.message.reply_text(
+            "📝 توضیحات سفارش را ارسال کنید."
+        )
         return
 
     if stage == "description":
@@ -174,6 +228,7 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=kb.main_menu()
     )
 
+
 async def file_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("stage") != "file":
         return
@@ -181,6 +236,7 @@ async def file_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await finish_order(update, context)
 
     code = context.user_data.get("last_code")
+
     if code:
         if update.message.document:
             db.add_file(
@@ -189,6 +245,7 @@ async def file_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "document",
                 update.message.document.file_name or ""
             )
+
         elif update.message.photo:
             db.add_file(
                 code,
@@ -196,8 +253,10 @@ async def file_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "photo"
             )
 
+
 async def finish_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
     service = db.get_service(context.user_data["service_id"])
+
     code = db.create_order(
         update.effective_user.id,
         service,
@@ -205,6 +264,7 @@ async def finish_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["phone"],
         context.user_data["description"]
     )
+
     context.user_data.clear()
     context.user_data["last_code"] = code
 
@@ -215,9 +275,11 @@ async def finish_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=kb.main_menu()
     )
 
+
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         return
+
     await update.message.reply_text(
         "👨‍💻 پنل مدیریت\n\n"
         "📦 سفارش‌ها\n💳 پرداخت‌ها\n"
@@ -226,18 +288,27 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚙️ تنظیمات"
     )
 
+
 def run():
     app = Application.builder().token(BOT_TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin))
+
     app.add_handler(CallbackQueryHandler(callback))
+
     app.add_handler(MessageHandler(
-        filters.PHOTO | filters.Document.ALL, file_message
+        filters.PHOTO | filters.Document.ALL,
+        file_message
     ))
+
     app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND, text_message
+        filters.TEXT & ~filters.COMMAND,
+        text_message
     ))
+
     app.run_polling()
+
 
 if __name__ == "__main__":
     run()
