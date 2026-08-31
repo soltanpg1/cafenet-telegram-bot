@@ -8,14 +8,14 @@ import keyboards as kb
 
 from config import BOT_TOKEN, ADMIN_IDS, CARD_NUMBER, SUPPORT_INFO
 
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
     CallbackQueryHandler,
     MessageHandler,
     ContextTypes,
-    filters
+    filters,
 )
 
 
@@ -25,7 +25,7 @@ from telegram.ext import (
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
+    level=logging.INFO,
 )
 
 logger = logging.getLogger(__name__)
@@ -39,16 +39,17 @@ db.init_db()
 
 
 # =========================================================
-# RENDER HEALTH CHECK
-# این قسمت فقط برای Web Service رایگان Render است.
-# هیچ ارتباطی با منطق دکمه‌های ربات ندارد.
+# RENDER HEALTH SERVER
 # =========================================================
 
 class HealthHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         self.send_response(200)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header(
+            "Content-Type",
+            "text/plain; charset=utf-8"
+        )
         self.end_headers()
         self.wfile.write(b"Bot is running")
 
@@ -57,6 +58,7 @@ class HealthHandler(BaseHTTPRequestHandler):
 
 
 def start_health_server():
+
     try:
         port = int(os.environ.get("PORT", 10000))
 
@@ -65,15 +67,16 @@ def start_health_server():
             HealthHandler
         )
 
-        logger.info(f"RENDER HEALTH SERVER STARTED ON PORT {port}")
+        logger.info(
+            f"RENDER HEALTH SERVER STARTED ON PORT {port}"
+        )
 
         server.serve_forever()
 
     except Exception:
-        logger.exception("HEALTH SERVER ERROR")
+        logger.exception("RENDER HEALTH SERVER ERROR")
 
 
-# اجرای Health Server در Thread جدا
 health_thread = threading.Thread(
     target=start_health_server,
     daemon=True
@@ -86,10 +89,14 @@ health_thread.start()
 # START
 # =========================================================
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     logger.info(
-        f"START COMMAND FROM USER: {update.effective_user.id}"
+        f"START COMMAND FROM USER: "
+        f"{update.effective_user.id}"
     )
 
     db.save_user(update.effective_user)
@@ -105,19 +112,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================================================
-# CALLBACK BUTTONS
+# CALLBACK HANDLER
 # =========================================================
 
-async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     query = update.callback_query
 
-    # -----------------------------------------------------
-    # ثبت لاگ برای بررسی کلیک دکمه
-    # -----------------------------------------------------
-
     logger.info(
-        f"CALLBACK RECEIVED: user={query.from_user.id}, "
+        f"CALLBACK RECEIVED | "
+        f"user={query.from_user.id} | "
         f"data={query.data}"
     )
 
@@ -128,13 +135,11 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data = query.data
 
 
-        # -------------------------------------------------
+        # =================================================
         # MAIN MENU
-        # -------------------------------------------------
+        # =================================================
 
         if data == "main":
-
-            logger.info("CALLBACK: main")
 
             context.user_data.clear()
 
@@ -146,13 +151,11 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
 
-        # -------------------------------------------------
-        # ORDER
-        # -------------------------------------------------
+        # =================================================
+        # REGISTER ORDER
+        # =================================================
 
         if data == "order":
-
-            logger.info("CALLBACK: order")
 
             await query.edit_message_text(
                 "🛒 ثبت سفارش\n\n"
@@ -163,15 +166,19 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
 
-        # -------------------------------------------------
+        # =================================================
         # CATEGORY
-        # -------------------------------------------------
+        # =================================================
 
         if data.startswith("cat:"):
 
-            logger.info(f"CALLBACK: category -> {data}")
+            category_id = int(
+                data.split(":")[1]
+            )
 
-            category_id = int(data.split(":")[1])
+            logger.info(
+                f"CATEGORY SELECTED: {category_id}"
+            )
 
             with db.connect() as database:
 
@@ -180,11 +187,8 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     (category_id,)
                 ).fetchone()
 
-            if not category:
 
-                logger.error(
-                    f"CATEGORY NOT FOUND: {category_id}"
-                )
+            if not category:
 
                 await query.edit_message_text(
                     "❌ دسته‌بندی پیدا نشد.",
@@ -193,8 +197,10 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 return
 
+
             await query.edit_message_text(
-                f"{category['emoji']} {category['name']}\n\n"
+                f"{category['emoji']} "
+                f"{category['name']}\n\n"
                 "لطفاً خدمت موردنظر را انتخاب کنید:",
                 reply_markup=kb.service_menu(category_id)
             )
@@ -202,23 +208,26 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
 
-        # -------------------------------------------------
+        # =================================================
         # SERVICE
-        # -------------------------------------------------
+        # =================================================
 
         if data.startswith("svc:"):
 
-            logger.info(f"CALLBACK: service -> {data}")
+            service_id = int(
+                data.split(":")[1]
+            )
 
-            service_id = int(data.split(":")[1])
+            logger.info(
+                f"SERVICE SELECTED: {service_id}"
+            )
 
-            service = db.get_service(service_id)
+            service = db.get_service(
+                service_id
+            )
+
 
             if not service:
-
-                logger.error(
-                    f"SERVICE NOT FOUND: {service_id}"
-                )
 
                 await query.edit_message_text(
                     "❌ خدمت موردنظر پیدا نشد.",
@@ -227,31 +236,36 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 return
 
+
             context.user_data.update(
                 service_id=service["id"],
                 stage="name"
             )
 
+
             await query.edit_message_text(
-                f"{service['emoji']} {service['name']}\n\n"
-                "برای ادامه ثبت سفارش، اطلاعات زیر دریافت می‌شود.\n\n"
+                f"{service['emoji']} "
+                f"{service['name']}\n\n"
+                "برای ادامه ثبت سفارش، اطلاعات زیر "
+                "دریافت می‌شود.\n\n"
                 "👤 نام و نام خانوادگی خود را ارسال کنید:"
             )
 
             return
 
 
-        # -------------------------------------------------
+        # =================================================
         # MY ORDERS
-        # -------------------------------------------------
+        # =================================================
 
         if data == "myorders":
 
-            logger.info("CALLBACK: myorders")
+            logger.info("MY ORDERS SELECTED")
 
             orders = db.get_user_orders(
                 query.from_user.id
             )
+
 
             if not orders:
 
@@ -263,49 +277,55 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
 
-            rows = [
-                [
-                    __import__("telegram").InlineKeyboardButton(
-                        f"📦 {o['code']} — {o['service_name']}",
-                        callback_data=f"detail:{o['code']}"
-                    )
-                ]
-                for o in orders[:20]
-            ]
+            rows = []
 
 
-            rows.append(
-                [
-                    __import__("telegram").InlineKeyboardButton(
-                        "🔙 بازگشت",
-                        callback_data="main"
+            for order in orders[:20]:
+
+                rows.append([
+                    InlineKeyboardButton(
+                        f"📦 {order['code']} — "
+                        f"{order['service_name']}",
+                        callback_data=(
+                            f"detail:{order['code']}"
+                        )
                     )
-                ]
-            )
+                ])
+
+
+            rows.append([
+                InlineKeyboardButton(
+                    "🔙 بازگشت",
+                    callback_data="main"
+                )
+            ])
 
 
             await query.edit_message_text(
                 "📋 سفارش‌های من",
-                reply_markup=__import__(
-                    "telegram"
-                ).InlineKeyboardMarkup(rows)
+                reply_markup=InlineKeyboardMarkup(rows)
             )
 
             return
 
 
-        # -------------------------------------------------
+        # =================================================
         # ORDER DETAIL
-        # -------------------------------------------------
+        # =================================================
 
         if data.startswith("detail:"):
 
-            logger.info(f"CALLBACK: detail -> {data}")
+            code = data.split(":")[1]
+
+            logger.info(
+                f"ORDER DETAIL: {code}"
+            )
 
             order = db.get_order(
-                data.split(":")[1],
+                code,
                 query.from_user.id
             )
+
 
             if not order:
 
@@ -335,30 +355,27 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
 
-        # -------------------------------------------------
+        # =================================================
         # PRICES
-        # -------------------------------------------------
+        # =================================================
 
         if data == "prices":
 
-            logger.info("CALLBACK: prices")
-
             await query.edit_message_text(
                 "💰 تعرفه خدمات\n\n"
-                "📌 هزینه بعضی خدمات پس از بررسی مدارک و نوع درخواست اعلام می‌شود.",
+                "📌 هزینه بعضی خدمات پس از بررسی "
+                "مدارک و نوع درخواست اعلام می‌شود.",
                 reply_markup=kb.back()
             )
 
             return
 
 
-        # -------------------------------------------------
+        # =================================================
         # HELP
-        # -------------------------------------------------
+        # =================================================
 
         if data == "help":
-
-            logger.info("CALLBACK: help")
 
             await query.edit_message_text(
                 "ℹ️ راهنمای استفاده\n\n"
@@ -372,13 +389,11 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
 
-        # -------------------------------------------------
+        # =================================================
         # SUPPORT
-        # -------------------------------------------------
+        # =================================================
 
         if data == "support":
-
-            logger.info("CALLBACK: support")
 
             await query.edit_message_text(
                 f"📞 پشتیبانی\n\n{SUPPORT_INFO}",
@@ -388,9 +403,9 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
 
-        # -------------------------------------------------
+        # =================================================
         # UNKNOWN CALLBACK
-        # -------------------------------------------------
+        # =================================================
 
         logger.warning(
             f"UNKNOWN CALLBACK DATA: {data}"
@@ -400,7 +415,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
 
         logger.exception(
-            f"CALLBACK ERROR: data={query.data}"
+            f"CALLBACK ERROR | data={query.data}"
         )
 
         try:
@@ -429,14 +444,17 @@ async def text_message(
     stage = context.user_data.get("stage")
 
     logger.info(
-        f"TEXT MESSAGE: user={update.effective_user.id}, "
+        f"TEXT MESSAGE | "
+        f"user={update.effective_user.id} | "
         f"stage={stage}"
     )
 
 
     if stage == "name":
 
-        context.user_data["full_name"] = update.message.text
+        context.user_data["full_name"] = (
+            update.message.text
+        )
 
         context.user_data["stage"] = "phone"
 
@@ -449,7 +467,9 @@ async def text_message(
 
     if stage == "phone":
 
-        context.user_data["phone"] = update.message.text
+        context.user_data["phone"] = (
+            update.message.text
+        )
 
         context.user_data["stage"] = "description"
 
@@ -462,7 +482,9 @@ async def text_message(
 
     if stage == "description":
 
-        context.user_data["description"] = update.message.text
+        context.user_data["description"] = (
+            update.message.text
+        )
 
         context.user_data["stage"] = "file"
 
@@ -518,7 +540,9 @@ async def file_message(
     )
 
 
-    code = context.user_data.get("last_code")
+    code = context.user_data.get(
+        "last_code"
+    )
 
 
     if code:
@@ -602,12 +626,15 @@ async def admin(
 
 
 # =========================================================
-# RUN BOT
+# RUN
 # =========================================================
 
 def run():
 
-    logger.info("STARTING TELEGRAM BOT...")
+    logger.info(
+        "STARTING TELEGRAM BOT..."
+    )
+
 
     app = (
         Application
@@ -617,20 +644,40 @@ def run():
     )
 
 
+    # -----------------------------------------------------
+    # COMMANDS
+    # -----------------------------------------------------
+
     app.add_handler(
-        CommandHandler("start", start)
+        CommandHandler(
+            "start",
+            start
+        )
     )
 
 
     app.add_handler(
-        CommandHandler("admin", admin)
+        CommandHandler(
+            "admin",
+            admin
+        )
     )
 
+
+    # -----------------------------------------------------
+    # INLINE BUTTONS
+    # -----------------------------------------------------
 
     app.add_handler(
-        CallbackQueryHandler(callback)
+        CallbackQueryHandler(
+            callback
+        )
     )
 
+
+    # -----------------------------------------------------
+    # FILES / PHOTOS
+    # -----------------------------------------------------
 
     app.add_handler(
         MessageHandler(
@@ -640,6 +687,10 @@ def run():
     )
 
 
+    # -----------------------------------------------------
+    # TEXT
+    # -----------------------------------------------------
+
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
@@ -648,9 +699,18 @@ def run():
     )
 
 
-    logger.info("TELEGRAM BOT POLLING STARTED")
+    logger.info(
+        "TELEGRAM BOT POLLING STARTED"
+    )
 
-    app.run_polling()
+
+    # دریافت صریح پیام‌ها و Callback Query ها
+    app.run_polling(
+        allowed_updates=[
+            "message",
+            "callback_query"
+        ]
+    )
 
 
 # =========================================================
