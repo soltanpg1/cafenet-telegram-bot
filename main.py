@@ -5,27 +5,50 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 
 import database as db
 import keyboards as kb
+
 from config import BOT_TOKEN, ADMIN_IDS, CARD_NUMBER, SUPPORT_INFO
+
 from telegram import Update
 from telegram.ext import (
-    Application, CommandHandler, CallbackQueryHandler,
-    MessageHandler, ContextTypes, filters
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    ContextTypes,
+    filters
 )
 
-logging.basicConfig(level=logging.INFO)
+
+# =========================================================
+# LOGGING
+# =========================================================
+
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
+
+logger = logging.getLogger(__name__)
+
+
+# =========================================================
+# DATABASE
+# =========================================================
+
 db.init_db()
 
 
 # =========================================================
-# Render Health Check
-# این بخش فقط برای باز نگه داشتن پورت در Render است.
-# منطق ربات تلگرام را تغییر نمی‌دهد.
+# RENDER HEALTH CHECK
+# این قسمت فقط برای Web Service رایگان Render است.
+# هیچ ارتباطی با منطق دکمه‌های ربات ندارد.
 # =========================================================
 
 class HealthHandler(BaseHTTPRequestHandler):
+
     def do_GET(self):
         self.send_response(200)
-        self.send_header("Content-type", "text/plain")
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.end_headers()
         self.wfile.write(b"Bot is running")
 
@@ -34,194 +57,441 @@ class HealthHandler(BaseHTTPRequestHandler):
 
 
 def start_health_server():
-    port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), HealthHandler)
-    logging.info(f"Health server running on port {port}")
-    server.serve_forever()
+    try:
+        port = int(os.environ.get("PORT", 10000))
+
+        server = HTTPServer(
+            ("0.0.0.0", port),
+            HealthHandler
+        )
+
+        logger.info(f"RENDER HEALTH SERVER STARTED ON PORT {port}")
+
+        server.serve_forever()
+
+    except Exception:
+        logger.exception("HEALTH SERVER ERROR")
 
 
-# اجرای سرور Render در یک Thread جدا
+# اجرای Health Server در Thread جدا
 health_thread = threading.Thread(
     target=start_health_server,
     daemon=True
 )
+
 health_thread.start()
 
 
+# =========================================================
+# START
+# =========================================================
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    logger.info(
+        f"START COMMAND FROM USER: {update.effective_user.id}"
+    )
+
     db.save_user(update.effective_user)
+
     context.user_data.clear()
+
     await update.message.reply_text(
-        "🖥️ منوی اصلی\n\nبه کافینت آنلاین خوش آمدید.\n"
+        "🖥️ منوی اصلی\n\n"
+        "به کافینت آنلاین خوش آمدید.\n"
         "لطفاً گزینه موردنظر را انتخاب کنید:",
         reply_markup=kb.main_menu()
     )
 
 
+# =========================================================
+# CALLBACK BUTTONS
+# =========================================================
+
 async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     query = update.callback_query
-    await query.answer()
-    data = query.data
 
-    if data == "main":
-        context.user_data.clear()
-        await query.edit_message_text(
-            "🖥️ منوی اصلی",
-            reply_markup=kb.main_menu()
-        )
-        return
+    # -----------------------------------------------------
+    # ثبت لاگ برای بررسی کلیک دکمه
+    # -----------------------------------------------------
 
-    if data == "order":
-        await query.edit_message_text(
-            "🛒 ثبت سفارش\n\nلطفاً دسته‌بندی خدمت موردنظر خود را انتخاب کنید:",
-            reply_markup=kb.category_menu()
-        )
-        return
+    logger.info(
+        f"CALLBACK RECEIVED: user={query.from_user.id}, "
+        f"data={query.data}"
+    )
 
-    if data.startswith("cat:"):
-        category_id = int(data.split(":")[1])
-        with db.connect() as database:
-            category = database.execute(
-                "SELECT * FROM categories WHERE id=?", (category_id,)
-            ).fetchone()
-        await query.edit_message_text(
-            f"{category['emoji']} {category['name']}\n\n"
-            "لطفاً خدمت موردنظر را انتخاب کنید:",
-            reply_markup=kb.service_menu(category_id)
-        )
-        return
+    try:
 
-    if data.startswith("svc:"):
-        service = db.get_service(int(data.split(":")[1]))
-        context.user_data.update(
-            service_id=service["id"],
-            stage="name"
-        )
-        await query.edit_message_text(
-            f"{service['emoji']} {service['name']}\n\n"
-            "برای ادامه ثبت سفارش، اطلاعات زیر دریافت می‌شود.\n\n"
-            "👤 نام و نام خانوادگی خود را ارسال کنید:"
-        )
-        return
+        await query.answer()
 
-    if data == "myorders":
-        orders = db.get_user_orders(query.from_user.id)
-        if not orders:
+        data = query.data
+
+
+        # -------------------------------------------------
+        # MAIN MENU
+        # -------------------------------------------------
+
+        if data == "main":
+
+            logger.info("CALLBACK: main")
+
+            context.user_data.clear()
+
             await query.edit_message_text(
-                "📋 هنوز سفارشی ثبت نکرده‌اید.",
-                reply_markup=kb.back()
+                "🖥️ منوی اصلی",
+                reply_markup=kb.main_menu()
             )
+
             return
 
-        rows = [
-            [__import__("telegram").InlineKeyboardButton(
-                f"📦 {o['code']} — {o['service_name']}",
-                callback_data=f"detail:{o['code']}"
-            )]
-            for o in orders[:20]
-        ]
 
-        rows.append([
-            __import__("telegram").InlineKeyboardButton(
-                "🔙 بازگشت", callback_data="main"
-            )
-        ])
+        # -------------------------------------------------
+        # ORDER
+        # -------------------------------------------------
 
-        await query.edit_message_text(
-            "📋 سفارش‌های من",
-            reply_markup=__import__("telegram").InlineKeyboardMarkup(rows)
-        )
-        return
+        if data == "order":
 
-    if data.startswith("detail:"):
-        order = db.get_order(data.split(":")[1], query.from_user.id)
+            logger.info("CALLBACK: order")
 
-        if not order:
             await query.edit_message_text(
-                "❌ سفارش پیدا نشد.",
+                "🛒 ثبت سفارش\n\n"
+                "لطفاً دسته‌بندی خدمت موردنظر خود را انتخاب کنید:",
+                reply_markup=kb.category_menu()
+            )
+
+            return
+
+
+        # -------------------------------------------------
+        # CATEGORY
+        # -------------------------------------------------
+
+        if data.startswith("cat:"):
+
+            logger.info(f"CALLBACK: category -> {data}")
+
+            category_id = int(data.split(":")[1])
+
+            with db.connect() as database:
+
+                category = database.execute(
+                    "SELECT * FROM categories WHERE id=?",
+                    (category_id,)
+                ).fetchone()
+
+            if not category:
+
+                logger.error(
+                    f"CATEGORY NOT FOUND: {category_id}"
+                )
+
+                await query.edit_message_text(
+                    "❌ دسته‌بندی پیدا نشد.",
+                    reply_markup=kb.back("order")
+                )
+
+                return
+
+            await query.edit_message_text(
+                f"{category['emoji']} {category['name']}\n\n"
+                "لطفاً خدمت موردنظر را انتخاب کنید:",
+                reply_markup=kb.service_menu(category_id)
+            )
+
+            return
+
+
+        # -------------------------------------------------
+        # SERVICE
+        # -------------------------------------------------
+
+        if data.startswith("svc:"):
+
+            logger.info(f"CALLBACK: service -> {data}")
+
+            service_id = int(data.split(":")[1])
+
+            service = db.get_service(service_id)
+
+            if not service:
+
+                logger.error(
+                    f"SERVICE NOT FOUND: {service_id}"
+                )
+
+                await query.edit_message_text(
+                    "❌ خدمت موردنظر پیدا نشد.",
+                    reply_markup=kb.back("order")
+                )
+
+                return
+
+            context.user_data.update(
+                service_id=service["id"],
+                stage="name"
+            )
+
+            await query.edit_message_text(
+                f"{service['emoji']} {service['name']}\n\n"
+                "برای ادامه ثبت سفارش، اطلاعات زیر دریافت می‌شود.\n\n"
+                "👤 نام و نام خانوادگی خود را ارسال کنید:"
+            )
+
+            return
+
+
+        # -------------------------------------------------
+        # MY ORDERS
+        # -------------------------------------------------
+
+        if data == "myorders":
+
+            logger.info("CALLBACK: myorders")
+
+            orders = db.get_user_orders(
+                query.from_user.id
+            )
+
+            if not orders:
+
+                await query.edit_message_text(
+                    "📋 هنوز سفارشی ثبت نکرده‌اید.",
+                    reply_markup=kb.back()
+                )
+
+                return
+
+
+            rows = [
+                [
+                    __import__("telegram").InlineKeyboardButton(
+                        f"📦 {o['code']} — {o['service_name']}",
+                        callback_data=f"detail:{o['code']}"
+                    )
+                ]
+                for o in orders[:20]
+            ]
+
+
+            rows.append(
+                [
+                    __import__("telegram").InlineKeyboardButton(
+                        "🔙 بازگشت",
+                        callback_data="main"
+                    )
+                ]
+            )
+
+
+            await query.edit_message_text(
+                "📋 سفارش‌های من",
+                reply_markup=__import__(
+                    "telegram"
+                ).InlineKeyboardMarkup(rows)
+            )
+
+            return
+
+
+        # -------------------------------------------------
+        # ORDER DETAIL
+        # -------------------------------------------------
+
+        if data.startswith("detail:"):
+
+            logger.info(f"CALLBACK: detail -> {data}")
+
+            order = db.get_order(
+                data.split(":")[1],
+                query.from_user.id
+            )
+
+            if not order:
+
+                await query.edit_message_text(
+                    "❌ سفارش پیدا نشد.",
+                    reply_markup=kb.back("myorders")
+                )
+
+                return
+
+
+            amount = (
+                f"{order['amount']:,} تومان"
+                if order["amount"]
+                else "پس از بررسی"
+            )
+
+
+            await query.edit_message_text(
+                f"📦 سفارش #{order['code']}\n\n"
+                f"خدمت: {order['service_name']}\n"
+                f"مبلغ: {amount}\n"
+                f"وضعیت: {order['status']}",
                 reply_markup=kb.back("myorders")
             )
+
             return
 
-        amount = (
-            f"{order['amount']:,} تومان"
-            if order["amount"]
-            else "پس از بررسی"
+
+        # -------------------------------------------------
+        # PRICES
+        # -------------------------------------------------
+
+        if data == "prices":
+
+            logger.info("CALLBACK: prices")
+
+            await query.edit_message_text(
+                "💰 تعرفه خدمات\n\n"
+                "📌 هزینه بعضی خدمات پس از بررسی مدارک و نوع درخواست اعلام می‌شود.",
+                reply_markup=kb.back()
+            )
+
+            return
+
+
+        # -------------------------------------------------
+        # HELP
+        # -------------------------------------------------
+
+        if data == "help":
+
+            logger.info("CALLBACK: help")
+
+            await query.edit_message_text(
+                "ℹ️ راهنمای استفاده\n\n"
+                "🛒 از ثبت سفارش خدمت را انتخاب کنید.\n"
+                "📎 مدارک را در جریان سفارش ارسال کنید.\n"
+                "📋 سفارش‌های من برای پیگیری است.\n"
+                "💳 پس از تعیین مبلغ، پرداخت انجام می‌شود.",
+                reply_markup=kb.back()
+            )
+
+            return
+
+
+        # -------------------------------------------------
+        # SUPPORT
+        # -------------------------------------------------
+
+        if data == "support":
+
+            logger.info("CALLBACK: support")
+
+            await query.edit_message_text(
+                f"📞 پشتیبانی\n\n{SUPPORT_INFO}",
+                reply_markup=kb.back()
+            )
+
+            return
+
+
+        # -------------------------------------------------
+        # UNKNOWN CALLBACK
+        # -------------------------------------------------
+
+        logger.warning(
+            f"UNKNOWN CALLBACK DATA: {data}"
         )
 
-        await query.edit_message_text(
-            f"📦 سفارش #{order['code']}\n\n"
-            f"خدمت: {order['service_name']}\n"
-            f"مبلغ: {amount}\n"
-            f"وضعیت: {order['status']}",
-            reply_markup=kb.back("myorders")
+
+    except Exception:
+
+        logger.exception(
+            f"CALLBACK ERROR: data={query.data}"
         )
-        return
 
-    if data == "prices":
-        await query.edit_message_text(
-            "💰 تعرفه خدمات\n\n"
-            "📌 هزینه بعضی خدمات پس از بررسی مدارک و نوع درخواست اعلام می‌شود.",
-            reply_markup=kb.back()
-        )
-        return
+        try:
 
-    if data == "help":
-        await query.edit_message_text(
-            "ℹ️ راهنمای استفاده\n\n"
-            "🛒 از ثبت سفارش خدمت را انتخاب کنید.\n"
-            "📎 مدارک را در جریان سفارش ارسال کنید.\n"
-            "📋 سفارش‌های من برای پیگیری است.\n"
-            "💳 پس از تعیین مبلغ، پرداخت انجام می‌شود.",
-            reply_markup=kb.back()
-        )
-        return
+            await query.message.reply_text(
+                "❌ هنگام پردازش درخواست مشکلی پیش آمد.\n"
+                "لطفاً دوباره تلاش کنید."
+            )
 
-    if data == "support":
-        await query.edit_message_text(
-            f"📞 پشتیبانی\n\n{SUPPORT_INFO}",
-            reply_markup=kb.back()
-        )
-        return
+        except Exception:
+
+            logger.exception(
+                "FAILED TO SEND CALLBACK ERROR MESSAGE"
+            )
 
 
-async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# =========================================================
+# TEXT MESSAGE
+# =========================================================
+
+async def text_message(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
     stage = context.user_data.get("stage")
 
+    logger.info(
+        f"TEXT MESSAGE: user={update.effective_user.id}, "
+        f"stage={stage}"
+    )
+
+
     if stage == "name":
+
         context.user_data["full_name"] = update.message.text
+
         context.user_data["stage"] = "phone"
+
         await update.message.reply_text(
             "📱 شماره موبایل خود را ارسال کنید."
         )
+
         return
 
+
     if stage == "phone":
+
         context.user_data["phone"] = update.message.text
+
         context.user_data["stage"] = "description"
+
         await update.message.reply_text(
             "📝 توضیحات سفارش را ارسال کنید."
         )
+
         return
 
+
     if stage == "description":
+
         context.user_data["description"] = update.message.text
+
         context.user_data["stage"] = "file"
+
         await update.message.reply_text(
             "📎 اگر مدرک یا فایل دارید ارسال کنید؛ "
             "اگر ندارید «ندارم» بنویسید."
         )
+
         return
 
+
     if stage == "file":
+
         if update.message.text.strip() == "ندارم":
-            await finish_order(update, context)
+
+            await finish_order(
+                update,
+                context
+            )
+
         else:
+
             await update.message.reply_text(
                 "لطفاً فایل یا عکس را ارسال کنید؛ "
                 "یا «ندارم» بنویسید."
             )
+
         return
+
 
     await update.message.reply_text(
         "لطفاً از منوی بات استفاده کنید.",
@@ -229,16 +499,32 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def file_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# =========================================================
+# FILE MESSAGE
+# =========================================================
+
+async def file_message(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
     if context.user_data.get("stage") != "file":
         return
 
-    await finish_order(update, context)
+
+    await finish_order(
+        update,
+        context
+    )
+
 
     code = context.user_data.get("last_code")
 
+
     if code:
+
         if update.message.document:
+
             db.add_file(
                 code,
                 update.message.document.file_id,
@@ -246,7 +532,9 @@ async def file_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 update.message.document.file_name or ""
             )
 
+
         elif update.message.photo:
+
             db.add_file(
                 code,
                 update.message.photo[-1].file_id,
@@ -254,8 +542,19 @@ async def file_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
 
-async def finish_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    service = db.get_service(context.user_data["service_id"])
+# =========================================================
+# FINISH ORDER
+# =========================================================
+
+async def finish_order(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    service = db.get_service(
+        context.user_data["service_id"]
+    )
+
 
     code = db.create_order(
         update.effective_user.id,
@@ -265,8 +564,11 @@ async def finish_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["description"]
     )
 
+
     context.user_data.clear()
+
     context.user_data["last_code"] = code
+
 
     await update.message.reply_text(
         f"✅ سفارش شما ثبت شد.\n\n"
@@ -276,39 +578,84 @@ async def finish_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# =========================================================
+# ADMIN
+# =========================================================
+
+async def admin(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
     if update.effective_user.id not in ADMIN_IDS:
         return
 
+
     await update.message.reply_text(
         "👨‍💻 پنل مدیریت\n\n"
-        "📦 سفارش‌ها\n💳 پرداخت‌ها\n"
+        "📦 سفارش‌ها\n"
+        "💳 پرداخت‌ها\n"
         "🔄 سفارش‌های در حال انجام\n"
         "✅ سفارش‌های تکمیل‌شده\n"
         "⚙️ تنظیمات"
     )
 
 
+# =========================================================
+# RUN BOT
+# =========================================================
+
 def run():
-    app = Application.builder().token(BOT_TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("admin", admin))
+    logger.info("STARTING TELEGRAM BOT...")
 
-    app.add_handler(CallbackQueryHandler(callback))
+    app = (
+        Application
+        .builder()
+        .token(BOT_TOKEN)
+        .build()
+    )
 
-    app.add_handler(MessageHandler(
-        filters.PHOTO | filters.Document.ALL,
-        file_message
-    ))
 
-    app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND,
-        text_message
-    ))
+    app.add_handler(
+        CommandHandler("start", start)
+    )
+
+
+    app.add_handler(
+        CommandHandler("admin", admin)
+    )
+
+
+    app.add_handler(
+        CallbackQueryHandler(callback)
+    )
+
+
+    app.add_handler(
+        MessageHandler(
+            filters.PHOTO | filters.Document.ALL,
+            file_message
+        )
+    )
+
+
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            text_message
+        )
+    )
+
+
+    logger.info("TELEGRAM BOT POLLING STARTED")
 
     app.run_polling()
 
+
+# =========================================================
+# MAIN
+# =========================================================
 
 if __name__ == "__main__":
     run()
