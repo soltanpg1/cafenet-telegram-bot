@@ -1,6 +1,15 @@
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ReplyKeyboardMarkup
+)
+
 import database as db
 
+
+# =========================
+# پنل مشتری
+# =========================
 
 def main_menu():
     return InlineKeyboardMarkup([
@@ -81,151 +90,240 @@ def back(callback="main"):
             InlineKeyboardButton(
                 "🔙 بازگشت",
                 callback_data=callback
-            )
-        ]
-    ])
-
-
-# =========================================================
-# ADMIN
-# =========================================================
-
-def admin_menu():
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(
-                "📦 همه سفارش‌ها",
-                callback_data="admin:orders"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "🆕 سفارش‌های جدید",
-                callback_data="admin:new"
             ),
             InlineKeyboardButton(
-                "🔄 در حال انجام",
-                callback_data="admin:processing"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "💳 در انتظار پرداخت",
-                callback_data="admin:payment"
-            ),
-            InlineKeyboardButton(
-                "✅ تکمیل‌شده",
-                callback_data="admin:completed"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "⚙️ تنظیمات",
-                callback_data="admin:settings"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "🔙 منوی اصلی",
+                "🏠 منوی اصلی",
                 callback_data="main"
             )
         ]
     ])
 
 
-def admin_order_buttons(code):
+def continue_order():
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
-                "▶️ شروع بررسی",
-                callback_data=f"admstart:{code}"
+                "▶️ ادامه همین سفارش",
+                callback_data="continue_order"
             )
         ],
         [
             InlineKeyboardButton(
-                "💬 گفتگو با مشتری",
-                callback_data=f"admchat:{code}"
+                "🆕 ثبت سفارش جدید",
+                callback_data="new_order"
             )
         ],
         [
             InlineKeyboardButton(
-                "📎 درخواست مدرک بیشتر",
-                callback_data=f"admfile:{code}"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "💰 تعیین مبلغ",
-                callback_data=f"admamount:{code}"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "🔄 تغییر وضعیت",
-                callback_data=f"admstatus:{code}"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "✅ تکمیل سفارش",
-                callback_data=f"admcomplete:{code}"
-            ),
-            InlineKeyboardButton(
-                "❌ رد سفارش",
-                callback_data=f"admreject:{code}"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "🔙 سفارش‌ها",
-                callback_data="admin:orders"
+                "🏠 منوی اصلی",
+                callback_data="main"
             )
         ]
     ])
 
 
-def admin_status_menu(code):
+def file_finished():
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
-                "🆕 جدید",
-                callback_data=f"setstatus:new:{code}"
+                "✅ تمام شد",
+                callback_data="finish_files"
             )
         ],
         [
             InlineKeyboardButton(
-                "🔄 در حال بررسی",
-                callback_data=f"setstatus:processing:{code}"
+                "❌ مدارکی ندارم",
+                callback_data="no_files"
             )
         ],
         [
             InlineKeyboardButton(
-                "📎 منتظر مدارک",
-                callback_data=f"setstatus:waiting_docs:{code}"
+                "🏠 منوی اصلی",
+                callback_data="main"
+            )
+        ]
+    ])
+
+
+# =========================
+# پنل مدیریت
+# =========================
+
+def admin_reply_keyboard():
+    return ReplyKeyboardMarkup(
+        [
+            [
+                "👨‍💻 پنل مدیریت",
+                "🆕 سفارش‌های جدید"
+            ],
+            [
+                "💳 در انتظار پرداخت",
+                "🔄 در حال انجام"
+            ],
+            [
+                "✅ تکمیل‌شده",
+                "📦 همه سفارش‌ها"
+            ],
+            [
+                "👥 مدیریت ادمین‌ها",
+                "💬 پیام‌های پشتیبانی"
+            ],
+            [
+                "⚙️ تنظیمات",
+                "🏠 خروج از پنل"
+            ]
+        ],
+        resize_keyboard=True,
+        is_persistent=True
+    )
+
+
+def admin_panel():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "🆕 سفارش‌های جدید",
+                callback_data="admin_status:new"
+            ),
+            InlineKeyboardButton(
+                "💳 در انتظار پرداخت",
+                callback_data="admin_status:waiting_payment"
             )
         ],
         [
             InlineKeyboardButton(
-                "💳 منتظر پرداخت",
-                callback_data=f"setstatus:waiting_payment:{code}"
-            )
-        ],
-        [
+                "🔄 در حال انجام",
+                callback_data="admin_status:in_progress"
+            ),
             InlineKeyboardButton(
                 "✅ تکمیل‌شده",
-                callback_data=f"setstatus:completed:{code}"
+                callback_data="admin_status:completed"
             )
         ],
         [
             InlineKeyboardButton(
-                "❌ ردشده",
-                callback_data=f"setstatus:rejected:{code}"
+                "📦 همه سفارش‌ها",
+                callback_data="admin_status:all"
             )
         ],
         [
             InlineKeyboardButton(
-                "🔙 بازگشت",
-                callback_data=f"adminorder:{code}"
+                "👥 مدیریت ادمین‌ها",
+                callback_data="admin_manage"
+            ),
+            InlineKeyboardButton(
+                "💬 پشتیبانی",
+                callback_data="admin_support"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "⚙️ تنظیمات",
+                callback_data="admin_settings"
+            )
+        ]
+    ])
+
+
+def admin_order_buttons(code, status):
+    rows = []
+
+    if status == "new":
+        rows.append([
+            InlineKeyboardButton(
+                "▶️ قبول و شروع سفارش",
+                callback_data=f"take:{code}"
+            )
+        ])
+
+    if status == "in_progress":
+        rows.append([
+            InlineKeyboardButton(
+                "💰 تعیین مبلغ",
+                callback_data=f"amount:{code}"
+            )
+        ])
+
+    if status == "waiting_payment":
+        rows.append([
+            InlineKeyboardButton(
+                "💳 بررسی پرداخت",
+                callback_data=f"payment:{code}"
+            )
+        ])
+
+    rows.append([
+        InlineKeyboardButton(
+            "💬 پیام به مشتری",
+            callback_data=f"reply:{code}"
+        )
+    ])
+
+    if status == "in_progress":
+        rows.append([
+            InlineKeyboardButton(
+                "✅ تکمیل سفارش",
+                callback_data=f"complete:{code}"
+            )
+        ])
+
+    rows.append([
+        InlineKeyboardButton(
+            "🔙 بازگشت",
+            callback_data=f"admin_status:{status}"
+        )
+    ])
+
+    return InlineKeyboardMarkup(rows)
+
+
+def payment_buttons(code, payment_id):
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "✅ تأیید پرداخت",
+                callback_data=f"approve_payment:{payment_id}:{code}"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "❌ رد پرداخت",
+                callback_data=f"reject_payment:{payment_id}:{code}"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "💬 پیام به مشتری",
+                callback_data=f"reply:{code}"
+            )
+        ]
+    ])
+
+
+def admin_management():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "➕ افزودن ادمین",
+                callback_data="add_admin"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "👥 لیست ادمین‌ها",
+                callback_data="admin_list"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "➖ حذف ادمین",
+                callback_data="remove_admin"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🔙 پنل مدیریت",
+                callback_data="admin_panel"
             )
         ]
     ])
