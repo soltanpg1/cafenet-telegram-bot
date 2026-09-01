@@ -1,8 +1,11 @@
 import logging
+import os
 import re
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 import database as db
-import keyboards as kb
+import keyboard as kb
 
 from config import (
     BOT_TOKEN,
@@ -25,6 +28,33 @@ from telegram.ext import (
     ContextTypes,
     filters
 )
+
+
+# =========================================================
+# RENDER / DEPLOYMENT HEALTH SERVER
+# =========================================================
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"Bot is running")
+
+    def log_message(self, format, *args):
+        return
+
+
+def start_health_server():
+    try:
+        port = int(os.environ.get("PORT", "10000"))
+        server = HTTPServer(("0.0.0.0", port), HealthHandler)
+        logger.info("Health server started on port %s", port)
+        server.serve_forever()
+    except OSError as exc:
+        logger.warning("Health server could not start: %s", exc)
+    except Exception:
+        logger.exception("Health server failed")
 
 
 # =========================================================
@@ -2615,6 +2645,12 @@ async def error_handler(
 # =========================================================
 
 def run():
+
+    if os.environ.get("PORT"):
+        threading.Thread(
+            target=start_health_server,
+            daemon=True
+        ).start()
 
     app = (
         Application
