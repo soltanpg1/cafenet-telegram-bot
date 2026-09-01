@@ -7,7 +7,20 @@ def connect():
     Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(DB_PATH)
     db.row_factory = sqlite3.Row
+    db.execute("PRAGMA foreign_keys = ON")
     return db
+
+
+def _add_column(db, table, column, definition):
+    columns = [
+        row["name"]
+        for row in db.execute(f"PRAGMA table_info({table})").fetchall()
+    ]
+
+    if column not in columns:
+        db.execute(
+            f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
+        )
 
 
 def init_db():
@@ -47,10 +60,7 @@ def init_db():
             description TEXT,
             amount INTEGER DEFAULT 0,
             status TEXT DEFAULT 'new',
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            started_at TEXT,
-            completed_at TEXT,
-            admin_id INTEGER
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
 
         CREATE TABLE IF NOT EXISTS files (
@@ -67,55 +77,47 @@ def init_db():
             order_id INTEGER NOT NULL,
             amount INTEGER NOT NULL,
             receipt_file_id TEXT NOT NULL,
+            receipt_type TEXT DEFAULT 'document',
             status TEXT DEFAULT 'pending',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
 
-        CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            order_id INTEGER NOT NULL,
-            sender_type TEXT NOT NULL,
-            sender_id INTEGER NOT NULL,
-            message_type TEXT DEFAULT 'text',
-            text TEXT,
-            telegram_file_id TEXT,
-            file_name TEXT,
+        CREATE TABLE IF NOT EXISTS admins (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            full_name TEXT,
+            role TEXT DEFAULT 'admin',
+            active INTEGER DEFAULT 1,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
 
-        CREATE INDEX IF NOT EXISTS idx_orders_status
-        ON orders(status);
+        CREATE TABLE IF NOT EXISTS support_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            order_code TEXT,
+            direction TEXT NOT NULL,
+            message TEXT,
+            telegram_message_id INTEGER,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
 
-        CREATE INDEX IF NOT EXISTS idx_orders_user
-        ON orders(user_id);
-
-        CREATE INDEX IF NOT EXISTS idx_files_order
-        ON files(order_id);
-
-        CREATE INDEX IF NOT EXISTS idx_messages_order
-        ON messages(order_id);
+        CREATE TABLE IF NOT EXISTS order_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id INTEGER NOT NULL,
+            status TEXT,
+            admin_id INTEGER,
+            description TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
         """)
 
-        # افزودن ستون‌ها به دیتابیس‌های قدیمی
-        existing_columns = {
-            row["name"]
-            for row in db.execute("PRAGMA table_info(orders)").fetchall()
-        }
+        # Migration برای دیتابیس قبلی
+        _add_column(db, "orders", "admin_id", "INTEGER")
+        _add_column(db, "orders", "admin_name", "TEXT")
+        _add_column(db, "orders", "updated_at", "TEXT")
+        _add_column(db, "payments", "receipt_type", "TEXT DEFAULT 'document'")
 
-        if "started_at" not in existing_columns:
-            db.execute("ALTER TABLE orders ADD COLUMN started_at TEXT")
-
-        if "completed_at" not in existing_columns:
-            db.execute("ALTER TABLE orders ADD COLUMN completed_at TEXT")
-
-        if "admin_id" not in existing_columns:
-            db.execute("ALTER TABLE orders ADD COLUMN admin_id INTEGER")
-
-        # دسته‌بندی‌های اولیه
-        if db.execute(
-            "SELECT COUNT(*) FROM categories"
-        ).fetchone()[0] == 0:
-
+        if db.execute("SELECT COUNT(*) FROM categories").fetchone()[0] == 0:
             categories = [
                 ("خدمات دولتی", "🏛", 1),
                 ("خدمات دانشگاهی و آموزشی", "🎓", 2),
@@ -206,7 +208,11 @@ def save_user(user):
 def categories():
     with connect() as db:
         return db.execute(
-            "SELECT * FROM categories ORDER BY sort_order"
+            """
+            SELECT *
+            FROM categories
+            ORDER BY sort_order
+            """
         ).fetchall()
 
 
@@ -214,7 +220,8 @@ def services(category_id):
     with connect() as db:
         return db.execute(
             """
-            SELECT * FROM services
+            SELECT *
+            FROM services
             WHERE category_id=?
             ORDER BY id
             """,
@@ -225,7 +232,11 @@ def services(category_id):
 def get_service(service_id):
     with connect() as db:
         return db.execute(
-            "SELECT * FROM services WHERE id=?",
+            """
+            SELECT *
+            FROM services
+            WHERE id=?
+            """,
             (service_id,)
         ).fetchone()
 
@@ -238,7 +249,6 @@ def create_order(
     description
 ):
     with connect() as db:
-
         cur = db.execute(
             """
             INSERT INTO orders
@@ -249,9 +259,10 @@ def create_order(
                 service_name,
                 full_name,
                 phone,
-                description
+                description,
+                status
             )
-            VALUES(?,?,?,?,?,?,?)
+            VALUES(?,?,?,?,?,?,?,?)
             """,
             (
                 "TEMP",
@@ -260,36 +271,47 @@ def create_order(
                 service["name"],
                 full_name,
                 phone,
-                description
+                description,
+                "new"
             )
         )
 
         order_id = cur.lastrowid
-
         code = f"CN-{1000 + order_id}"
 
         db.execute(
             """
             UPDATE orders
-            SET code=?
+            SET code=?, updated_at=CURRENT_TIMESTAMP
             WHERE id=?
             """,
             (code, order_id)
         )
 
+        db.execute(
+            """
+            INSERT INTO order_history
+            (order_id,status,description)
+            VALUES(?,?,?)
+            """,
+            (
+                order_id,
+                "new",
+                "سفارش توسط مشتری ثبت شد"
+            )
+        )
+
         return code
 
 
-def add_file(
-    code,
-    file_id,
-    file_type,
-    file_name=""
-):
+def add_file(code, file_id, file_type, file_name=""):
     with connect() as db:
-
         order = db.execute(
-            "SELECT id FROM orders WHERE code=?",
+            """
+            SELECT id
+            FROM orders
+            WHERE code=?
+            """,
             (code,)
         ).fetchone()
 
@@ -332,6 +354,21 @@ def get_order_files(code):
         ).fetchall()
 
 
+def get_file_count(code):
+    with connect() as db:
+        row = db.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM files f
+            JOIN orders o ON o.id=f.order_id
+            WHERE o.code=?
+            """,
+            (code,)
+        ).fetchone()
+
+        return row["count"]
+
+
 def get_user_orders(user_id):
     with connect() as db:
         return db.execute(
@@ -347,37 +384,35 @@ def get_user_orders(user_id):
 
 def get_order(code, user_id=None):
     with connect() as db:
-
         if user_id is None:
             return db.execute(
-                "SELECT * FROM orders WHERE code=?",
+                """
+                SELECT
+                    o.*,
+                    u.username AS username
+                FROM orders o
+                LEFT JOIN users u
+                    ON u.id=o.user_id
+                WHERE o.code=?
+                """,
                 (code,)
             ).fetchone()
 
         return db.execute(
             """
-            SELECT *
-            FROM orders
-            WHERE code=? AND user_id=?
+            SELECT
+                o.*,
+                u.username AS username
+            FROM orders o
+            LEFT JOIN users u
+                ON u.id=o.user_id
+            WHERE o.code=? AND o.user_id=?
             """,
             (code, user_id)
         ).fetchone()
 
 
-def get_all_orders(limit=30):
-    with connect() as db:
-        return db.execute(
-            """
-            SELECT *
-            FROM orders
-            ORDER BY id ASC
-            LIMIT ?
-            """,
-            (limit,)
-        ).fetchall()
-
-
-def get_orders_by_status(status, limit=30):
+def get_orders_by_status(status):
     with connect() as db:
         return db.execute(
             """
@@ -385,76 +420,161 @@ def get_orders_by_status(status, limit=30):
             FROM orders
             WHERE status=?
             ORDER BY id ASC
-            LIMIT ?
             """,
-            (status, limit)
+            (status,)
         ).fetchall()
 
 
-def start_order(code, admin_id):
+def get_all_orders():
     with connect() as db:
-        db.execute(
+        return db.execute(
             """
-            UPDATE orders
-            SET status='processing',
-                started_at=CURRENT_TIMESTAMP,
-                admin_id=?
+            SELECT *
+            FROM orders
+            ORDER BY id DESC
+            """
+        ).fetchall()
+
+
+def set_status(code, status, admin_id=None, admin_name=None, description=""):
+    with connect() as db:
+        order = db.execute(
+            """
+            SELECT id
+            FROM orders
             WHERE code=?
             """,
-            (admin_id, code)
-        )
+            (code,)
+        ).fetchone()
 
+        if not order:
+            return False
 
-def set_status(code, status):
-    with connect() as db:
-
-        if status == "completed":
+        if admin_id is not None:
             db.execute(
                 """
                 UPDATE orders
                 SET status=?,
-                    completed_at=CURRENT_TIMESTAMP
+                    admin_id=?,
+                    admin_name=?,
+                    updated_at=CURRENT_TIMESTAMP
                 WHERE code=?
                 """,
-                (status, code)
+                (
+                    status,
+                    admin_id,
+                    admin_name,
+                    code
+                )
             )
         else:
             db.execute(
                 """
                 UPDATE orders
-                SET status=?
+                SET status=?,
+                    updated_at=CURRENT_TIMESTAMP
                 WHERE code=?
                 """,
-                (status, code)
+                (
+                    status,
+                    code
+                )
             )
 
+        db.execute(
+            """
+            INSERT INTO order_history
+            (
+                order_id,
+                status,
+                admin_id,
+                description
+            )
+            VALUES(?,?,?,?)
+            """,
+            (
+                order["id"],
+                status,
+                admin_id,
+                description
+            )
+        )
 
-def set_amount(code, amount):
+        return True
+
+
+def assign_order(code, admin_id, admin_name):
     with connect() as db:
+        current = db.execute(
+            """
+            SELECT admin_id
+            FROM orders
+            WHERE code=?
+            """,
+            (code,)
+        ).fetchone()
+
+        if not current:
+            return False, "not_found"
+
+        if current["admin_id"] is not None:
+            return False, "already_assigned"
+
         db.execute(
             """
             UPDATE orders
-            SET amount=?,
-                status='waiting_payment'
+            SET admin_id=?,
+                admin_name=?,
+                status='in_progress',
+                updated_at=CURRENT_TIMESTAMP
             WHERE code=?
             """,
-            (amount, code)
+            (
+                admin_id,
+                admin_name,
+                code
+            )
         )
 
-
-def add_message(
-    code,
-    sender_type,
-    sender_id,
-    message_type="text",
-    text=None,
-    telegram_file_id=None,
-    file_name=None
-):
-    with connect() as db:
-
         order = db.execute(
-            "SELECT id FROM orders WHERE code=?",
+            """
+            SELECT id
+            FROM orders
+            WHERE code=?
+            """,
+            (code,)
+        ).fetchone()
+
+        db.execute(
+            """
+            INSERT INTO order_history
+            (
+                order_id,
+                status,
+                admin_id,
+                description
+            )
+            VALUES(?,?,?,?)
+            """,
+            (
+                order["id"],
+                "in_progress",
+                admin_id,
+                f"سفارش توسط {admin_name} پذیرفته شد"
+            )
+        )
+
+        return True, "ok"
+
+
+def set_amount(code, amount, admin_id=None, admin_name=None):
+    with connect() as db:
+        order = db.execute(
+            """
+            SELECT id
+            FROM orders
+            WHERE code=?
+            """,
             (code,)
         ).fetchone()
 
@@ -463,42 +583,275 @@ def add_message(
 
         db.execute(
             """
-            INSERT INTO messages
+            UPDATE orders
+            SET amount=?,
+                status='waiting_payment',
+                updated_at=CURRENT_TIMESTAMP
+            WHERE code=?
+            """,
+            (
+                amount,
+                code
+            )
+        )
+
+        db.execute(
+            """
+            INSERT INTO order_history
             (
                 order_id,
-                sender_type,
-                sender_id,
-                message_type,
-                text,
-                telegram_file_id,
-                file_name
+                status,
+                admin_id,
+                description
             )
-            VALUES(?,?,?,?,?,?,?)
+            VALUES(?,?,?,?)
             """,
             (
                 order["id"],
-                sender_type,
-                sender_id,
-                message_type,
-                text,
-                telegram_file_id,
-                file_name
+                "waiting_payment",
+                admin_id,
+                f"مبلغ {amount:,} تومان تعیین شد"
             )
         )
 
         return True
 
 
-def get_messages(code, limit=50):
+def add_payment(code, amount, receipt_file_id, receipt_type):
+    with connect() as db:
+        order = db.execute(
+            """
+            SELECT id
+            FROM orders
+            WHERE code=?
+            """,
+            (code,)
+        ).fetchone()
+
+        if not order:
+            return False
+
+        db.execute(
+            """
+            INSERT INTO payments
+            (
+                order_id,
+                amount,
+                receipt_file_id,
+                receipt_type,
+                status
+            )
+            VALUES(?,?,?,?,?)
+            """,
+            (
+                order["id"],
+                amount,
+                receipt_file_id,
+                receipt_type,
+                "pending"
+            )
+        )
+
+        return True
+
+
+def get_pending_payment(code):
     with connect() as db:
         return db.execute(
             """
-            SELECT m.*
-            FROM messages m
-            JOIN orders o ON o.id=m.order_id
-            WHERE o.code=?
-            ORDER BY m.id DESC
-            LIMIT ?
+            SELECT p.*, o.code
+            FROM payments p
+            JOIN orders o ON o.id=p.order_id
+            WHERE o.code=? AND p.status='pending'
+            ORDER BY p.id DESC
+            LIMIT 1
             """,
-            (code, limit)
+            (code,)
+        ).fetchone()
+
+
+def update_payment(payment_id, status):
+    with connect() as db:
+        db.execute(
+            """
+            UPDATE payments
+            SET status=?
+            WHERE id=?
+            """,
+            (
+                status,
+                payment_id
+            )
+        )
+
+
+def set_payment_status_and_order(payment_id, status):
+    with connect() as db:
+        payment = db.execute(
+            """
+            SELECT order_id
+            FROM payments
+            WHERE id=?
+            """,
+            (payment_id,)
+        ).fetchone()
+
+        if not payment:
+            return None
+
+        db.execute(
+            """
+            UPDATE payments
+            SET status=?
+            WHERE id=?
+            """,
+            (
+                status,
+                payment_id
+            )
+        )
+
+        return payment["order_id"]
+
+
+def get_order_by_id(order_id):
+    with connect() as db:
+        return db.execute(
+            """
+            SELECT *
+            FROM orders
+            WHERE id=?
+            """,
+            (order_id,)
+        ).fetchone()
+
+
+def add_admin(user_id, username, full_name, role="admin"):
+    with connect() as db:
+        db.execute(
+            """
+            INSERT INTO admins
+            (
+                user_id,
+                username,
+                full_name,
+                role,
+                active
+            )
+            VALUES(?,?,?,?,1)
+            ON CONFLICT(user_id)
+            DO UPDATE SET
+                username=excluded.username,
+                full_name=excluded.full_name,
+                role=excluded.role,
+                active=1
+            """,
+            (
+                user_id,
+                username,
+                full_name,
+                role
+            )
+        )
+
+
+def remove_admin(user_id):
+    with connect() as db:
+        db.execute(
+            """
+            UPDATE admins
+            SET active=0
+            WHERE user_id=?
+            """,
+            (user_id,)
+        )
+
+
+def get_admin(user_id):
+    with connect() as db:
+        return db.execute(
+            """
+            SELECT *
+            FROM admins
+            WHERE user_id=? AND active=1
+            """,
+            (user_id,)
+        ).fetchone()
+
+
+def get_all_admins():
+    with connect() as db:
+        return db.execute(
+            """
+            SELECT *
+            FROM admins
+            ORDER BY role DESC, created_at
+            """
+        ).fetchall()
+
+
+def get_active_admins():
+    with connect() as db:
+        return db.execute(
+            """
+            SELECT *
+            FROM admins
+            WHERE active=1
+            """
+        ).fetchall()
+
+
+def save_support_message(
+    user_id,
+    order_code,
+    direction,
+    message,
+    telegram_message_id=None
+):
+    with connect() as db:
+        db.execute(
+            """
+            INSERT INTO support_messages
+            (
+                user_id,
+                order_code,
+                direction,
+                message,
+                telegram_message_id
+            )
+            VALUES(?,?,?,?,?)
+            """,
+            (
+                user_id,
+                order_code,
+                direction,
+                message,
+                telegram_message_id
+            )
+        )
+
+
+def get_support_messages():
+    with connect() as db:
+        return db.execute(
+            """
+            SELECT *
+            FROM support_messages
+            ORDER BY id DESC
+            LIMIT 100
+            """
+        ).fetchall()
+
+
+def get_order_history(code):
+    with connect() as db:
+        return db.execute(
+            """
+            SELECT h.*, o.code
+            FROM order_history h
+            JOIN orders o ON o.id=h.order_id
+            WHERE o.code=?
+            ORDER BY h.id ASC
+            """,
+            (code,)
         ).fetchall()
