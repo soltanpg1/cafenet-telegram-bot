@@ -91,6 +91,17 @@ def init_db():
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
 
+        CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id INTEGER NOT NULL,
+            sender_type TEXT NOT NULL,
+            sender_id INTEGER NOT NULL,
+            message_type TEXT DEFAULT 'text',
+            text TEXT,
+            telegram_file_id TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
         CREATE TABLE IF NOT EXISTS support_messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
@@ -115,6 +126,8 @@ def init_db():
         _add_column(db, "orders", "admin_id", "INTEGER")
         _add_column(db, "orders", "admin_name", "TEXT")
         _add_column(db, "orders", "updated_at", "TEXT")
+        _add_column(db, "orders", "started_at", "TEXT")
+        _add_column(db, "orders", "completed_at", "TEXT")
         _add_column(db, "payments", "receipt_type", "TEXT DEFAULT 'document'")
 
         if db.execute("SELECT COUNT(*) FROM categories").fetchone()[0] == 0:
@@ -457,6 +470,8 @@ def set_status(code, status, admin_id=None, admin_name=None, description=""):
                 SET status=?,
                     admin_id=?,
                     admin_name=?,
+                    started_at=CASE WHEN ?='in_progress' AND started_at IS NULL THEN CURRENT_TIMESTAMP ELSE started_at END,
+                    completed_at=CASE WHEN ?='completed' THEN CURRENT_TIMESTAMP ELSE completed_at END,
                     updated_at=CURRENT_TIMESTAMP
                 WHERE code=?
                 """,
@@ -464,6 +479,8 @@ def set_status(code, status, admin_id=None, admin_name=None, description=""):
                     status,
                     admin_id,
                     admin_name,
+                    status,
+                    status,
                     code
                 )
             )
@@ -472,10 +489,14 @@ def set_status(code, status, admin_id=None, admin_name=None, description=""):
                 """
                 UPDATE orders
                 SET status=?,
+                    started_at=CASE WHEN ?='in_progress' AND started_at IS NULL THEN CURRENT_TIMESTAMP ELSE started_at END,
+                    completed_at=CASE WHEN ?='completed' THEN CURRENT_TIMESTAMP ELSE completed_at END,
                     updated_at=CURRENT_TIMESTAMP
                 WHERE code=?
                 """,
                 (
+                    status,
+                    status,
                     status,
                     code
                 )
@@ -855,3 +876,66 @@ def get_order_history(code):
             """,
             (code,)
         ).fetchall()
+
+
+# -----------------------------------------------------------------
+# سازگاری با نسخه قدیمی: پیام‌های مرتبط با سفارش
+# -----------------------------------------------------------------
+
+def add_message(
+    order_code,
+    sender_type,
+    sender_id,
+    text=None,
+    message_type="text",
+    telegram_file_id=None
+):
+    with connect() as db:
+        order = db.execute(
+            "SELECT id FROM orders WHERE code=?",
+            (order_code,)
+        ).fetchone()
+        if not order:
+            return False
+
+        db.execute(
+            """
+            INSERT INTO messages
+            (order_id, sender_type, sender_id, message_type, text, telegram_file_id)
+            VALUES(?,?,?,?,?,?)
+            """,
+            (
+                order["id"],
+                sender_type,
+                sender_id,
+                message_type,
+                text,
+                telegram_file_id
+            )
+        )
+        return True
+
+
+def get_messages(order_code):
+    with connect() as db:
+        return db.execute(
+            """
+            SELECT m.*, o.code
+            FROM messages m
+            JOIN orders o ON o.id=m.order_id
+            WHERE o.code=?
+            ORDER BY m.id ASC
+            """,
+            (order_code,)
+        ).fetchall()
+
+
+def start_order(code, admin_id=None, admin_name=None):
+    """Compatibility helper for the previous database API."""
+    return set_status(
+        code,
+        "in_progress",
+        admin_id,
+        admin_name,
+        "سفارش شروع شد"
+    )
