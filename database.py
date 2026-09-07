@@ -340,7 +340,7 @@ def add_file(code, file_id, file_type, file_name=""):
                 file_type,
                 file_name
             )
-            VALUES(?,?,?,?,?)
+            VALUES(?,?,?,?)
             """,
             (
                 order["id"],
